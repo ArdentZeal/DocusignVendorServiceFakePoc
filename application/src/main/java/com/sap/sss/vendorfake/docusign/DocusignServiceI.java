@@ -11,4 +11,7 @@ public interface DocusignServiceI {
     })
     @POST("envelopes")
     Call<Void> createEnvelope(@Body DocusignEnvelope envelope);
+
+    @POST("oauth/token")
+    Call<DocusignJwtAccessTokenResponse> obtainAccessToken(@Body DocusignJwtAccessTokenPayload accessTokenPayload);
 }

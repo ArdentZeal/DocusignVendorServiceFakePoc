@@ -11,6 +11,7 @@ public class DocusignService {
 
     private static DocusignService instance = null;
     private DocusignServiceI retrofitService = null;
+    private DocusignServiceI retrofitServiceOAuth = null;
 
     public static DocusignService getInstance() {
         if(instance == null) {
@@ -27,6 +28,13 @@ public class DocusignService {
                 .build();
 
         retrofitService = retrofit.create(DocusignServiceI.class);
+
+        Retrofit retrofitOAuth = new Retrofit.Builder()
+                .baseUrl("https://account-d.docusign.com/")
+                .addConverterFactory(GsonConverterFactory.create())
+                .build();
+
+        retrofitServiceOAuth = retrofitOAuth.create(DocusignServiceI.class);
     }
 
     public Call<Void> createEnvelope(SapEnvelope envelope) {
@@ -62,5 +70,11 @@ public class DocusignService {
         dsEnvelope.setStatus("sent");
 
         return dsEnvelope;
+    }
+
+    public Call<DocusignJwtAccessTokenResponse> obtainAccessToken(String token) {
+        DocusignJwtAccessTokenPayload accessTokenPayload = new DocusignJwtAccessTokenPayload(token);
+
+        return retrofitServiceOAuth.obtainAccessToken(accessTokenPayload);
     }
 }
