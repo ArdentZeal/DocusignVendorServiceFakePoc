@@ -1,20 +1,20 @@
 package com.sap.sss.vendorfake.routers;
 
-import com.sap.sss.vendorfake.docusign.DocusignJwtAccessTokenResponse;
-import com.sap.sss.vendorfake.docusign.DocusignJwtBody;
-import com.sap.sss.vendorfake.docusign.DocusignJwtHeader;
-import com.sap.sss.vendorfake.docusign.DocusignService;
+import com.sap.sss.vendorfake.datastore.InMemoryDataStore;
+import com.sap.sss.vendorfake.docusign.*;
 import com.sap.sss.vendorfake.models.OAuthCallbackData;
+import com.sap.sss.vendorfake.models.OAuthPendingRequestContext;
+import com.sap.sss.vendorfake.models.SapConnectedUsers;
+import com.sap.sss.vendorfake.models.SapSetupNewTenantPayload;
 import com.sap.sss.vendorfake.utiilities.CommonUtility;
+import org.jsoup.Connection;
 
-import javax.ws.rs.GET;
-import javax.ws.rs.Path;
-import javax.ws.rs.Produces;
-import javax.ws.rs.QueryParam;
+import javax.ws.rs.*;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import java.io.IOException;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.security.SignatureException;
@@ -26,20 +26,46 @@ import java.util.*;
 public class OAuthRouter {
 
     // should be created for each tenant, static for now
-    private static String docuSignIntegrationKey = "bc46e8ab-7ff9-4bf0-a95e-9d226f408349";
+    // private static String docuSignIntegrationKey = "bc46e8ab-7ff9-4bf0-a95e-9d226f408349";
+
+    // private static String docuSignSecretKey = "a3ef9480-c0e3-40c2-be9b-532bbb9ccf84";
 
     private static String docuSignEnvironmentUrlString = "account-d.docusign.com";
-    private static String docuSignRequestedScope = "signature impersonation";
+    private static String docuSignRequestedScope = "signature";
 
-    // should be matched for each SAP User, static for now
-    private static String docuSignUserId = "8ea115a3-963f-45e4-bd42-37331705769f";
+    // TODO: Save docusign user to sapUser
 
-    private static List<OAuthCallbackData> savedOAuthData = new ArrayList<>();
+    @POST
+    @Path("setupNewTenant")
+    public Response setupNewTenant(@HeaderParam("X-SAP-AA-UserId") String sapUserId, @HeaderParam("X-SAP-AA-TenantId") String sapTenantId, @HeaderParam("X-SAP-AA-ShouldUseSharedAuth") boolean shouldUseSharedAuth, @HeaderParam("X-SAP-AA-ActOnBehalfOfUserId") String sapOnBehalfUserId, @HeaderParam("X-SAP-AA-Signature") String signature, SapSetupNewTenantPayload setupNewTenantPayload) {
+        Response checkAuthenticationResponse = CommonUtility.checkAuthenticationSignature(sapUserId, sapTenantId, shouldUseSharedAuth, sapOnBehalfUserId, signature);
+        if(checkAuthenticationResponse != null) {
+            return checkAuthenticationResponse;
+        }
+
+        InMemoryDataStore.getInstance().saveTenant(setupNewTenantPayload);
+
+        return Response.status(Response.Status.OK).entity("Tenant " + setupNewTenantPayload.getTenantId() + " successfully setup!").build();
+    }
 
     @GET
     @Path("obtainConsent")
-    public Response obtainConsent() {
-        String url = "https://account-d.docusign.com/oauth/auth?response_type=code&scope=signature%20impersonation&client_id=" + docuSignIntegrationKey + "&redirect_uri=https://sssvendorfake-silly-buffalo.cfapps.sap.hana.ondemand.com/oauthcallback";
+    public Response obtainConsent(@QueryParam("sapUserId") String sapUserId, @QueryParam("sapTenantId") String sapTenantId) {
+        Response checkTenantResponse = CommonUtility.checkTenant(sapTenantId);
+        if(checkTenantResponse != null) {
+            return checkTenantResponse;
+        }
+
+        SapSetupNewTenantPayload sapTenantPayload = InMemoryDataStore.getInstance().getTenant(sapTenantId);
+        String docusignIntegrationKey = sapTenantPayload.getDocusignIntegrationKey();
+
+
+        String pendingRequestUUID = UUID.randomUUID().toString();
+        OAuthPendingRequestContext oAuthPendingRequestContext = new OAuthPendingRequestContext(sapUserId, sapTenantId);
+
+        InMemoryDataStore.getInstance().savePendingRequestContext(pendingRequestUUID, oAuthPendingRequestContext);
+
+        String url = "https://account-d.docusign.com/oauth/auth?response_type=code&scope=signature%20impersonation&client_id=" + docusignIntegrationKey + "&state=" + pendingRequestUUID + "&redirect_uri=https://sssvendorfake-silly-buffalo.cfapps.sap.hana.ondemand.com/oauthcallback";
         URI uri = URI.create(url);
 
         return Response.seeOther(uri).build();
@@ -47,22 +73,35 @@ public class OAuthRouter {
 
     @GET
     @Path("jwttest")
-    public Response doJwt() {
+    public Response doJwt(@HeaderParam("X-SAP-AA-UserId") String sapUserId, @HeaderParam("X-SAP-AA-TenantId") String sapTenantId, @HeaderParam("X-SAP-AA-ShouldUseSharedAuth") boolean shouldUseSharedAuth, @HeaderParam("X-SAP-AA-ActOnBehalfOfUserId") String sapOnBehalfUserId, @HeaderParam("X-SAP-AA-Signature") String signature) {
+
+        Response checkAuthenticationResponse = CommonUtility.checkAuthenticationSignature(sapUserId, sapTenantId, shouldUseSharedAuth, sapOnBehalfUserId, signature);
+        if(checkAuthenticationResponse != null) {
+            return checkAuthenticationResponse;
+        }
+
+        Response checkTenantResponse = CommonUtility.performAndCheckUserAndTenant(sapUserId, sapTenantId);
+        if(checkTenantResponse != null) {
+            return checkTenantResponse;
+        }
+
+        SapSetupNewTenantPayload sapTenantPayload = InMemoryDataStore.getInstance().getTenant(sapTenantId);
+        String docusignIntegrationKey = sapTenantPayload.getDocusignIntegrationKey();
+
+        SapConnectedUsers sapConnectedUsers = InMemoryDataStore.getInstance().getConnectedUsers(sapUserId, sapTenantId);
+        String docusignUserId = sapConnectedUsers.getDocusignUserId();
 
         Date now = Calendar.getInstance().getTime();
         long nowEpochTime = now.getTime();
 
-        System.out.println(nowEpochTime);
-
         DocusignJwtHeader docusignJwtHeader = new DocusignJwtHeader();
         String jwtHeaderJson = CommonUtility.getConfiguredGsonInstance().toJson(docusignJwtHeader);
-        System.out.println(jwtHeaderJson);
-        String jwtBase64HeaderJson = Base64.getEncoder().encodeToString(jwtHeaderJson.getBytes());
+        String jwtBase64HeaderJson = Base64.getUrlEncoder().encodeToString(jwtHeaderJson.getBytes());
 
-        DocusignJwtBody docusignJwtBody = new DocusignJwtBody(docuSignIntegrationKey, docuSignUserId, nowEpochTime, nowEpochTime + 60 * 60 * 1000, docuSignEnvironmentUrlString, docuSignRequestedScope);
+
+        DocusignJwtBody docusignJwtBody = new DocusignJwtBody(docusignIntegrationKey, docusignUserId, nowEpochTime, nowEpochTime + 60 * 60 * 1000, docuSignEnvironmentUrlString, docuSignRequestedScope);
         String jwtBodyJson = CommonUtility.getConfiguredGsonInstance().toJson(docusignJwtBody);
-        System.out.println(jwtBodyJson);
-        String jwtBase64BodyJson = Base64.getEncoder().encodeToString(jwtBodyJson.getBytes());
+        String jwtBase64BodyJson = Base64.getUrlEncoder().encodeToString(jwtBodyJson.getBytes(StandardCharsets.UTF_8));
 
         String docuSignPrivateKey = "-----BEGIN RSA PRIVATE KEY-----\n" +
                 "MIIEogIBAAKCAQEAm9/gDjc0jBIH2Xu5QyuisUPjft7WrzUB22KjqZEoSGhThqaR\n" +
@@ -94,15 +133,13 @@ public class OAuthRouter {
 
         String docuSignCombinedToken1 = jwtBase64HeaderJson + "." + jwtBase64BodyJson;
 
-        System.out.println(docuSignCombinedToken1);
-
-        String signedDocusignToken = null;
+        String docusignSignature = null;
         try {
-            signedDocusignToken = CommonUtility.signSHA256RSAfromPKCS1(docuSignCombinedToken1, docuSignPrivateKey);
+            docusignSignature = CommonUtility.signSHA256RSAfromPKCS1(docuSignCombinedToken1, docuSignPrivateKey);
 
-            String docusignCombinedToken2 = docuSignCombinedToken1 + "." + signedDocusignToken;
+            String docusignCombinedToken2 = docuSignCombinedToken1 + "." + docusignSignature;
 
-            return this.obtainAccessToken(docusignCombinedToken2);
+            return this.obtainJwtAccessToken(docusignCombinedToken2);
         } catch (IOException e) {
             e.printStackTrace();
         } catch (NoSuchAlgorithmException e) {
@@ -118,9 +155,9 @@ public class OAuthRouter {
         return Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity("Token signing failed!").build();
     }
 
-    private Response obtainAccessToken(String signedDocusignToken) {
+    private Response obtainJwtAccessToken(String signedDocusignToken) {
         try {
-            retrofit2.Response<DocusignJwtAccessTokenResponse> accessTokenResponse = DocusignService.getInstance().obtainAccessToken(signedDocusignToken).execute();
+            retrofit2.Response<DocusignAccessTokenResponse> accessTokenResponse = DocusignService.getInstance().obtainJwtAccessToken(signedDocusignToken).execute();
 
             if(accessTokenResponse.isSuccessful()) {
                 System.out.println(accessTokenResponse.body().getAccess_token());
@@ -136,23 +173,102 @@ public class OAuthRouter {
     }
 
     @GET
-    @Path("oauthcallback")
-    public Response getOAuthCallback(@QueryParam("code") String code, @QueryParam("state") String state)
-    {
-        OAuthCallbackData oAuthData = new OAuthCallbackData(code, state);
-
-        savedOAuthData.add(0, oAuthData);
-        if(savedOAuthData.size() > 10) {
-            savedOAuthData.remove(savedOAuthData.size() - 1);
+    @Path("startAuthCodeGrant")
+    public Response startAuthCodeGrant(@QueryParam("sapUserId") String sapUserId, @QueryParam("sapTenantId") String sapTenantId) {
+        Response checkTenantResponse = CommonUtility.checkTenant(sapTenantId);
+        if(checkTenantResponse != null) {
+            return checkTenantResponse;
         }
 
-        return Response.status(Response.Status.OK).entity(oAuthData).build();
+        SapSetupNewTenantPayload sapTenantPayload = InMemoryDataStore.getInstance().getTenant(sapTenantId);
+        String docusignIntegrationKey = sapTenantPayload.getDocusignIntegrationKey();
+
+        String pendingRequestUUID = UUID.randomUUID().toString();
+        OAuthPendingRequestContext oAuthPendingRequestContext = new OAuthPendingRequestContext(sapUserId, sapTenantId);
+
+        InMemoryDataStore.getInstance().savePendingRequestContext(pendingRequestUUID, oAuthPendingRequestContext);
+
+        String url = "https://account-d.docusign.com/oauth/auth?response_type=code&scope=signature&client_id=" + docusignIntegrationKey + "&state=" + pendingRequestUUID + "&redirect_uri=https://sssvendorfake-silly-buffalo.cfapps.sap.hana.ondemand.com/oauthcallback";
+        URI uri = URI.create(url);
+
+        return Response.seeOther(uri).build();
+    }
+
+    private Response obtainIndividualAccessToken(String token, String sapUserId, String sapTenantId) {
+
+        SapSetupNewTenantPayload sapTenantPayload = InMemoryDataStore.getInstance().getTenant(sapTenantId);
+        String docusignIntegrationKey = sapTenantPayload.getDocusignIntegrationKey();
+        String docusignSecretKey = sapTenantPayload.getDocusignSecretKey();
+
+        SapConnectedUsers sapConnectedUsers = InMemoryDataStore.getInstance().getConnectedUsers(sapUserId, sapTenantId);
+        if(sapConnectedUsers == null) {
+            sapConnectedUsers = new SapConnectedUsers(sapUserId, sapTenantId, null, null, null, null);
+        }
+
+        try {
+            retrofit2.Response<DocusignAccessTokenResponse> accessTokenResponse = DocusignService.getInstance().obtainAuthCodeGrantAccessToken(this.buildBase64AuthKey(docusignIntegrationKey, docusignSecretKey), token).execute();
+
+            if(accessTokenResponse.isSuccessful()) {
+                String accessToken = accessTokenResponse.body().getAccess_token();
+                String refreshToken = accessTokenResponse.body().getRefresh_token();
+
+                sapConnectedUsers.setDocusignAccessToken(accessToken);
+                sapConnectedUsers.setDocusignRefreshToken(refreshToken);
+                InMemoryDataStore.getInstance().saveConnectedUsers(sapConnectedUsers);
+
+                return this.selectDefaultAccount(sapUserId, sapTenantId, accessToken);
+                // return Response.status(Response.Status.OK).entity(sapConnectedUsers).build();
+            } else {
+                return Response.status(Response.Status.BAD_REQUEST).entity("Docusign rest call not successful: " + accessTokenResponse.message()).build();
+            }
+
+
+        } catch (IOException e) {
+            e.printStackTrace();
+            return Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity("Docusign rest call failed!").build();
+        }
+    }
+
+    private Response selectDefaultAccount(String sapUserId, String sapTenantId, String accessToken) {
+
+        SapConnectedUsers sapConnectedUsers = InMemoryDataStore.getInstance().getConnectedUsers(sapUserId, sapTenantId);
+        // check for null and throw error in prod
+
+        String authHeader = "Bearer " + accessToken;
+        try {
+            retrofit2.Response<DocusignUserInfo> userInfoResponse = DocusignService.getInstance().getUserInfo(authHeader).execute();
+
+            DocusignUserInfo docusignUserInfo = userInfoResponse.body();
+            sapConnectedUsers.setDocusignUserId(docusignUserInfo.getSub());
+
+             for(DocusignAccount account : docusignUserInfo.getAccounts()) {
+                 if(account.isIs_default()) {
+                     sapConnectedUsers.setDocusignAccountId(account.getAccount_id());
+                 }
+             }
+
+            return Response.status(Response.Status.OK).entity(sapConnectedUsers).build();
+        } catch (IOException e) {
+            e.printStackTrace();
+            return Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity("Docusign rest call failed!").build();
+        }
     }
 
     @GET
-    @Path("oauthsaved")
-    public Response getSavedOAuthCallback()
+    @Path("oauthcallback")
+    public Response getOAuthCallback(@QueryParam("code") String code, @QueryParam("state") String state)
     {
-        return Response.status(Response.Status.OK).entity(savedOAuthData).build();
+        OAuthPendingRequestContext oAuthPendingRequestContext = InMemoryDataStore.getInstance().getPendingRequestContext(state);
+
+        if(oAuthPendingRequestContext == null) {
+            return Response.status(Response.Status.BAD_REQUEST).entity("We could not find the pending Request Context for " + state).build();
+        }
+
+        return this.obtainIndividualAccessToken(code, oAuthPendingRequestContext.getSapUserId(), oAuthPendingRequestContext.getSapTenantId());
+    }
+
+    private String buildBase64AuthKey(String docuSignIntegrationKey, String docuSignSecretKey) {
+        String intAndSecretKeys = docuSignIntegrationKey + ":" + docuSignSecretKey;
+        return "Basic " + Base64.getUrlEncoder().encodeToString(intAndSecretKeys.getBytes(StandardCharsets.UTF_8));
     }
 }

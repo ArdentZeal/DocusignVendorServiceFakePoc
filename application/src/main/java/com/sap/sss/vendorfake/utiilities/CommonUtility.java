@@ -3,9 +3,11 @@ package com.sap.sss.vendorfake.utiilities;
 import com.fatboyindustrial.gsonjavatime.Converters;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.sap.sss.vendorfake.datastore.InMemoryDataStore;
 import sun.security.util.DerInputStream;
 import sun.security.util.DerValue;
 
+import javax.ws.rs.core.Response;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
@@ -64,10 +66,67 @@ public class CommonUtility {
         RSAPrivateCrtKeySpec keySpec = new RSAPrivateCrtKeySpec(modulus, publicExp, privateExp, prime1, prime2, exp1, exp2, crtCoef);
         KeyFactory keyFactory = KeyFactory.getInstance("RSA");
         PrivateKey privateKey = keyFactory.generatePrivate(keySpec);
+
         Signature privateSignature = Signature.getInstance("SHA256withRSA");
         privateSignature.initSign(privateKey);
         privateSignature.update(input.getBytes(StandardCharsets.UTF_8));
         byte[] s = privateSignature.sign();
         return Base64.getEncoder().encodeToString(s);
+    }
+
+    public static Response peformAndCheckAllAuthentication(String sapUserId, String sapTenantId, boolean shouldUseSharedAuth, String sapOnBehalfUserId, String signature) {
+        Response checkAuthenticationSignatureResponse = CommonUtility.checkAuthenticationSignature(sapUserId, sapTenantId, shouldUseSharedAuth, sapOnBehalfUserId, signature);
+        if(checkAuthenticationSignatureResponse != null) {
+            return checkAuthenticationSignatureResponse;
+        }
+
+        Response performAndCheckUserAndTenantResponse = CommonUtility.performAndCheckUserAndTenant(sapUserId, sapTenantId);
+        if(performAndCheckUserAndTenantResponse != null) {
+            return performAndCheckUserAndTenantResponse;
+        }
+
+        return null;
+    }
+
+    public static Response checkAuthenticationSignature(String sapUserId, String sapTenantId, boolean shouldUseSharedAuth, String sapOnBehalfUserId, String signature) {
+        // we do not really check signature for now, implement shared secret or private key later in real app
+
+        if(false) {
+            return Response.status(Response.Status.BAD_REQUEST).entity("Signature could not be trusted!").build();
+        }
+
+        return null;
+    }
+
+    public static Response performAndCheckUserAndTenant(String sapUserId, String sapTenantId) {
+
+        Response checkTenantResponse = CommonUtility.checkTenant(sapTenantId);
+        if(checkTenantResponse != null) {
+            return checkTenantResponse;
+        }
+
+        Response checkConnectedUsersResponse = CommonUtility.checkConnectedUsers(sapUserId, sapTenantId);
+        if(checkConnectedUsersResponse != null) {
+            return checkConnectedUsersResponse;
+        }
+
+
+        return null;
+    }
+
+    public static Response checkTenant(String sapTenantId) {
+        if(InMemoryDataStore.getInstance().getTenant(sapTenantId) == null) {
+            return Response.status(Response.Status.BAD_REQUEST).entity("We do not know tenantId " + sapTenantId + " yet, please call /setupNewTenant first!").build();
+        }
+
+        return null;
+    }
+
+    public static Response checkConnectedUsers(String sapUserId, String sapTenantId) {
+        if(InMemoryDataStore.getInstance().getConnectedUsers(sapUserId, sapTenantId) == null) {
+            return Response.status(Response.Status.UNAUTHORIZED).entity("We do not know tenantId " + sapTenantId + " yet, please call /setupNewTenant first!").build();
+        }
+
+        return null;
     }
 }

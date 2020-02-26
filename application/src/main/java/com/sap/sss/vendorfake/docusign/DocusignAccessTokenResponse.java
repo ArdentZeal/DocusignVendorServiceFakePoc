@@ -1,12 +1,14 @@
 package com.sap.sss.vendorfake.docusign;
 
-public class DocusignJwtAccessTokenResponse {
+public class DocusignAccessTokenResponse {
     private String access_token;
+    private String refresh_token;
     private String token_type;
     private long expires_in;
 
-    public DocusignJwtAccessTokenResponse(String access_token, String token_type, long expires_in) {
+    public DocusignAccessTokenResponse(String access_token, String refresh_token, String token_type, long expires_in) {
         this.access_token = access_token;
+        this.refresh_token = refresh_token;
         this.token_type = token_type;
         this.expires_in = expires_in;
     }
@@ -17,6 +19,14 @@ public class DocusignJwtAccessTokenResponse {
 
     public void setAccess_token(String access_token) {
         this.access_token = access_token;
+    }
+
+    public String getRefresh_token() {
+        return refresh_token;
+    }
+
+    public void setRefresh_token(String refresh_token) {
+        this.refresh_token = refresh_token;
     }
 
     public String getToken_type() {

@@ -3,6 +3,8 @@ package com.sap.sss.vendorfake.docusign;
 import java.util.ArrayList;
 
 import com.sap.sss.vendorfake.models.SapEnvelope;
+import okhttp3.OkHttpClient;
+import okhttp3.logging.HttpLoggingInterceptor;
 import retrofit2.Call;
 import retrofit2.Retrofit;
 import retrofit2.converter.gson.GsonConverterFactory;
@@ -11,7 +13,7 @@ public class DocusignService {
 
     private static DocusignService instance = null;
     private DocusignServiceI retrofitService = null;
-    private DocusignServiceI retrofitServiceOAuth = null;
+    private DocusignOAuthServiceI retrofitServiceOAuth = null;
 
     public static DocusignService getInstance() {
         if(instance == null) {
@@ -23,24 +25,40 @@ public class DocusignService {
 
     private DocusignService() {
         Retrofit retrofit = new Retrofit.Builder()
-                .baseUrl("https://demo.docusign.net/restapi/v2.1/accounts/9401127/")
+                .baseUrl("https://demo.docusign.net/restapi/v2.1/")
                 .addConverterFactory(GsonConverterFactory.create())
                 .build();
 
         retrofitService = retrofit.create(DocusignServiceI.class);
 
         Retrofit retrofitOAuth = new Retrofit.Builder()
-                .baseUrl("https://account-d.docusign.com/")
+                .baseUrl("https://account-d.docusign.com/oauth/")
                 .addConverterFactory(GsonConverterFactory.create())
+                .client(this.buildHttpLoggingClient())
                 .build();
 
-        retrofitServiceOAuth = retrofitOAuth.create(DocusignServiceI.class);
+        retrofitServiceOAuth = retrofitOAuth.create(DocusignOAuthServiceI.class);
     }
 
-    public Call<Void> createEnvelope(SapEnvelope envelope) {
+    private OkHttpClient buildHttpLoggingClient() {
+        HttpLoggingInterceptor logging = new HttpLoggingInterceptor();
+        // set your desired log level
+        logging.setLevel(HttpLoggingInterceptor.Level.BODY);
+
+        OkHttpClient.Builder httpClient = new OkHttpClient.Builder();
+        // add your other interceptors …
+
+        // add logging as last interceptor
+        httpClient.addInterceptor(logging);  // <-- this is the important line!
+
+        return httpClient.build();
+    }
+
+    public Call<Void> createEnvelope(String accessToken, String docusignAccountId, SapEnvelope envelope) {
+        String authHeader = "Bearer " + accessToken;
         DocusignEnvelope docusignEnvelope = createFakeDocusignEnvelope(envelope);
 
-        return retrofitService.createEnvelope(docusignEnvelope);
+        return retrofitService.createEnvelope(authHeader, docusignAccountId, docusignEnvelope);
     }
 
     private DocusignEnvelope createFakeDocusignEnvelope(SapEnvelope envelope) {
@@ -72,9 +90,23 @@ public class DocusignService {
         return dsEnvelope;
     }
 
-    public Call<DocusignJwtAccessTokenResponse> obtainAccessToken(String token) {
-        DocusignJwtAccessTokenPayload accessTokenPayload = new DocusignJwtAccessTokenPayload(token);
+    public Call<DocusignAccessTokenResponse> obtainJwtAccessToken(String token) {
+        String jwtGrantType = "urn:ietf:params:oauth:grant-type:jwt-bearer";
+        DocusignAccessTokenPayload accessTokenPayload = new DocusignAccessTokenPayload(jwtGrantType, token, null);
 
-        return retrofitServiceOAuth.obtainAccessToken(accessTokenPayload);
+        // , accessTokenPayload.getRedirect_uri()
+        return retrofitServiceOAuth.obtainAccessToken(null, accessTokenPayload.getGrant_type(), accessTokenPayload.getAssertion());
+    }
+
+    public Call<DocusignAccessTokenResponse> obtainAuthCodeGrantAccessToken(String authHeader, String token) {
+        String redirectUriString = "https://sssvendorfake-silly-buffalo.cfapps.sap.hana.ondemand.com/oauthcallback";
+        DocusignAccessTokenPayload accessTokenPayload = new DocusignAccessTokenPayload("authorization_code", token, redirectUriString);
+
+        // , accessTokenPayload.getRedirect_uri()
+        return retrofitServiceOAuth.obtainAccessToken(authHeader, accessTokenPayload.getGrant_type(), accessTokenPayload.getAssertion());
+    }
+
+    public Call<DocusignUserInfo> getUserInfo(String authHeader) {
+        return retrofitServiceOAuth.getUserInfo(authHeader);
     }
 }
