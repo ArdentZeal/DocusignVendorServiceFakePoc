@@ -2,13 +2,15 @@ package com.sap.sss.vendorfake.models;
 
 public class SapSetupNewTenantPayload {
     private String tenantId;
-    private String docusignIntegrationKey;
-    private String docusignSecretKey;
+    private boolean isSharedAuth;
+    private String vendorAppIdentifier;
+    private String vendorAppSecretKey;
 
-    public SapSetupNewTenantPayload(String tenantId, String docusignIntegrationKey, String docusignSecretKey) {
+    public SapSetupNewTenantPayload(String tenantId, boolean isSharedAuth, String vendorAppIdentifier, String vendorAppSecretKey) {
         this.tenantId = tenantId;
-        this.docusignIntegrationKey = docusignIntegrationKey;
-        this.docusignSecretKey = docusignSecretKey;
+        this.isSharedAuth = isSharedAuth;
+        this.vendorAppIdentifier = vendorAppIdentifier;
+        this.vendorAppSecretKey = vendorAppSecretKey;
     }
 
     public String getTenantId() {
@@ -19,19 +21,27 @@ public class SapSetupNewTenantPayload {
         this.tenantId = tenantId;
     }
 
-    public String getDocusignIntegrationKey() {
-        return docusignIntegrationKey;
+    public boolean isSharedAuth() {
+        return isSharedAuth;
     }
 
-    public void setDocusignIntegrationKey(String docusignIntegrationKey) {
-        this.docusignIntegrationKey = docusignIntegrationKey;
+    public void setSharedAuth(boolean sharedAuth) {
+        isSharedAuth = sharedAuth;
     }
 
-    public String getDocusignSecretKey() {
-        return docusignSecretKey;
+    public String getVendorAppIdentifier() {
+        return vendorAppIdentifier;
     }
 
-    public void setDocusignSecretKey(String docusignSecretKey) {
-        this.docusignSecretKey = docusignSecretKey;
+    public void setVendorAppIdentifier(String vendorAppIdentifier) {
+        this.vendorAppIdentifier = vendorAppIdentifier;
+    }
+
+    public String getVendorAppSecretKey() {
+        return vendorAppSecretKey;
+    }
+
+    public void setVendorAppSecretKey(String vendorAppSecretKey) {
+        this.vendorAppSecretKey = vendorAppSecretKey;
     }
 }

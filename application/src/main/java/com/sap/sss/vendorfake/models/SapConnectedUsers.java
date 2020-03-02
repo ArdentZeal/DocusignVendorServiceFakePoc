@@ -6,14 +6,16 @@ public class SapConnectedUsers {
     private String sapTenantId;
     private String docusignUserId;
     private String docusignAccountId;
+    private String docusignJwtAccessToken;
     private String docusignAccessToken;
     private String docusignRefreshToken;
 
-    public SapConnectedUsers(String sapUserId, String sapTenantId, String docusignUserId, String docusignAccountId, String docusignAccessToken, String docusignRefreshToken) {
+    public SapConnectedUsers(String sapUserId, String sapTenantId, String docusignUserId, String docusignAccountId, String docusignJwtAccessToken, String docusignAccessToken, String docusignRefreshToken) {
         this.sapUserId = sapUserId;
         this.sapTenantId = sapTenantId;
         this.docusignUserId = docusignUserId;
         this.docusignAccountId = docusignAccountId;
+        this.docusignJwtAccessToken = docusignJwtAccessToken;
         this.docusignAccessToken = docusignAccessToken;
         this.docusignRefreshToken = docusignRefreshToken;
     }
@@ -48,6 +50,14 @@ public class SapConnectedUsers {
 
     public void setDocusignAccountId(String docusignAccountId) {
         this.docusignAccountId = docusignAccountId;
+    }
+
+    public String getDocusignJwtAccessToken() {
+        return docusignJwtAccessToken;
+    }
+
+    public void setDocusignJwtAccessToken(String docusignJwtAccessToken) {
+        this.docusignJwtAccessToken = docusignJwtAccessToken;
     }
 
     public String getDocusignAccessToken() {

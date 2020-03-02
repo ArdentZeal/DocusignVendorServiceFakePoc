@@ -1,44 +1,41 @@
 package com.sap.sss.vendorfake.routers;
 
+import com.google.common.collect.ImmutableMultimap;
 import com.sap.sss.vendorfake.datastore.InMemoryDataStore;
 import com.sap.sss.vendorfake.docusign.*;
-import com.sap.sss.vendorfake.models.OAuthCallbackData;
 import com.sap.sss.vendorfake.models.OAuthPendingRequestContext;
 import com.sap.sss.vendorfake.models.SapConnectedUsers;
 import com.sap.sss.vendorfake.models.SapSetupNewTenantPayload;
 import com.sap.sss.vendorfake.utiilities.CommonUtility;
-import org.jsoup.Connection;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.SignatureAlgorithm;
+import io.jsonwebtoken.security.Keys;
+import retrofit2.http.Query;
 
+import javax.crypto.SecretKey;
+import javax.crypto.spec.SecretKeySpec;
 import javax.ws.rs.*;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
-import java.security.InvalidKeyException;
-import java.security.NoSuchAlgorithmException;
-import java.security.SignatureException;
+import java.security.*;
 import java.security.spec.InvalidKeySpecException;
 import java.util.*;
 
 @Path("/")
 @Produces(MediaType.APPLICATION_JSON)
 public class OAuthRouter {
-
-    // should be created for each tenant, static for now
-    // private static String docuSignIntegrationKey = "bc46e8ab-7ff9-4bf0-a95e-9d226f408349";
-
-    // private static String docuSignSecretKey = "a3ef9480-c0e3-40c2-be9b-532bbb9ccf84";
-
     private static String docuSignEnvironmentUrlString = "account-d.docusign.com";
-    private static String docuSignRequestedScope = "signature";
+    private static String docuSignRequestedScope = "signature impersonation";
 
     // TODO: Save docusign user to sapUser
 
     @POST
     @Path("setupNewTenant")
-    public Response setupNewTenant(@HeaderParam("X-SAP-AA-UserId") String sapUserId, @HeaderParam("X-SAP-AA-TenantId") String sapTenantId, @HeaderParam("X-SAP-AA-ShouldUseSharedAuth") boolean shouldUseSharedAuth, @HeaderParam("X-SAP-AA-ActOnBehalfOfUserId") String sapOnBehalfUserId, @HeaderParam("X-SAP-AA-Signature") String signature, SapSetupNewTenantPayload setupNewTenantPayload) {
-        Response checkAuthenticationResponse = CommonUtility.checkAuthenticationSignature(sapUserId, sapTenantId, shouldUseSharedAuth, sapOnBehalfUserId, signature);
+    public Response setupNewTenant(@HeaderParam("X-SAP-AA-UserId") String sapUserId, @HeaderParam("X-SAP-AA-TenantId") String sapTenantId, @HeaderParam("X-SAP-AA-Signature") String signature, SapSetupNewTenantPayload setupNewTenantPayload) {
+        Response checkAuthenticationResponse = CommonUtility.checkAuthenticationSignature(sapUserId, sapTenantId, signature);
         if(checkAuthenticationResponse != null) {
             return checkAuthenticationResponse;
         }
@@ -49,15 +46,31 @@ public class OAuthRouter {
     }
 
     @GET
-    @Path("obtainConsent")
-    public Response obtainConsent(@QueryParam("sapUserId") String sapUserId, @QueryParam("sapTenantId") String sapTenantId) {
+    @Path("askForUserPermissionAndConnectUsers")
+    public Response askForUserPermissionAndConnectUsers(@QueryParam("sapUserId") String sapUserId, @QueryParam("sapTenantId") String sapTenantId, @QueryParam("sapSignature") String sapSignature) {
+
         Response checkTenantResponse = CommonUtility.checkTenant(sapTenantId);
         if(checkTenantResponse != null) {
             return checkTenantResponse;
         }
 
         SapSetupNewTenantPayload sapTenantPayload = InMemoryDataStore.getInstance().getTenant(sapTenantId);
-        String docusignIntegrationKey = sapTenantPayload.getDocusignIntegrationKey();
+
+        if(sapTenantPayload.isSharedAuth()) {
+            return this.obtainJwtConsent(sapUserId, sapTenantId);
+        } else {
+            return this.getAuthCodeGrantPermission(sapUserId, sapTenantId);
+        }
+    }
+
+    private Response obtainJwtConsent(String sapUserId, String sapTenantId) {
+        Response checkTenantResponse = CommonUtility.checkTenant(sapTenantId);
+        if(checkTenantResponse != null) {
+            return checkTenantResponse;
+        }
+
+        SapSetupNewTenantPayload sapTenantPayload = InMemoryDataStore.getInstance().getTenant(sapTenantId);
+        String docusignIntegrationKey = sapTenantPayload.getVendorAppIdentifier();
 
 
         String pendingRequestUUID = UUID.randomUUID().toString();
@@ -71,117 +84,14 @@ public class OAuthRouter {
         return Response.seeOther(uri).build();
     }
 
-    @GET
-    @Path("jwttest")
-    public Response doJwt(@HeaderParam("X-SAP-AA-UserId") String sapUserId, @HeaderParam("X-SAP-AA-TenantId") String sapTenantId, @HeaderParam("X-SAP-AA-ShouldUseSharedAuth") boolean shouldUseSharedAuth, @HeaderParam("X-SAP-AA-ActOnBehalfOfUserId") String sapOnBehalfUserId, @HeaderParam("X-SAP-AA-Signature") String signature) {
-
-        Response checkAuthenticationResponse = CommonUtility.checkAuthenticationSignature(sapUserId, sapTenantId, shouldUseSharedAuth, sapOnBehalfUserId, signature);
-        if(checkAuthenticationResponse != null) {
-            return checkAuthenticationResponse;
-        }
-
-        Response checkTenantResponse = CommonUtility.performAndCheckUserAndTenant(sapUserId, sapTenantId);
-        if(checkTenantResponse != null) {
-            return checkTenantResponse;
-        }
-
-        SapSetupNewTenantPayload sapTenantPayload = InMemoryDataStore.getInstance().getTenant(sapTenantId);
-        String docusignIntegrationKey = sapTenantPayload.getDocusignIntegrationKey();
-
-        SapConnectedUsers sapConnectedUsers = InMemoryDataStore.getInstance().getConnectedUsers(sapUserId, sapTenantId);
-        String docusignUserId = sapConnectedUsers.getDocusignUserId();
-
-        Date now = Calendar.getInstance().getTime();
-        long nowEpochTime = now.getTime();
-
-        DocusignJwtHeader docusignJwtHeader = new DocusignJwtHeader();
-        String jwtHeaderJson = CommonUtility.getConfiguredGsonInstance().toJson(docusignJwtHeader);
-        String jwtBase64HeaderJson = Base64.getUrlEncoder().encodeToString(jwtHeaderJson.getBytes());
-
-
-        DocusignJwtBody docusignJwtBody = new DocusignJwtBody(docusignIntegrationKey, docusignUserId, nowEpochTime, nowEpochTime + 60 * 60 * 1000, docuSignEnvironmentUrlString, docuSignRequestedScope);
-        String jwtBodyJson = CommonUtility.getConfiguredGsonInstance().toJson(docusignJwtBody);
-        String jwtBase64BodyJson = Base64.getUrlEncoder().encodeToString(jwtBodyJson.getBytes(StandardCharsets.UTF_8));
-
-        String docuSignPrivateKey = "-----BEGIN RSA PRIVATE KEY-----\n" +
-                "MIIEogIBAAKCAQEAm9/gDjc0jBIH2Xu5QyuisUPjft7WrzUB22KjqZEoSGhThqaR\n" +
-                "nkZAnBcHNFEmhU1iglvD75dsSAP8u2Kw2aXTcJ9gxoQZ+GImEK11/SJyxemhlviC\n" +
-                "GRe4CWUqI0tV2aIwCh4scJjhUFV6bFuJzIZcF6JjFRmKc0cBLNsEljgCcw3ZdAXI\n" +
-                "48hsLfJ8aPJMnTO3ppV1DVOe/mL8NOdMm/2WAaM3QNVQsWSCFgrBiJDZm5GYjXjR\n" +
-                "FIiCd1Tjhtdti4pbwTu8Uh3ONQYFdVfc33xmjUY9fglLT1gd5Cnct+tpq0b/lxgg\n" +
-                "+i1DSxBLywYDuSXDqD+vOKtotISO5/VWnPnBXwIDAQABAoIBAEWZhkLytXzhxC2B\n" +
-                "CC0M+90pEhihSbz77zNVbPyW+ySxqLIUCCti9RB9W9MpdQjKj/TjIq8FruzNEvlc\n" +
-                "zNiyKaI9GAosDCiTMqn5uhhoXFUwx91QY07u/1b6nAEcb135BHhQFsnECb9EG6Ds\n" +
-                "krAHQnGvKYzPVbm5d7XeqcKlibpzOxi3eTtMdw5atWm7FwbwxMBt0xqpDmWg3tDV\n" +
-                "ipe019eOk/D74uH4L20oYVg65Y5ogMSxLieiN6VUhAZSua7bs2Ce6o/z0OHCwzFO\n" +
-                "hIbTjO37JvrEG63BM5/JgEjqF1kuXIQHoNXXjl52k+7ODdLySown3oEnvZlAIflE\n" +
-                "8LZNxJECgYEA995Zj0c6C6/w8Quj/ItDhQxiESs/c4bpobDw5R83S/rBNd2ptdNr\n" +
-                "JxO8Xau3iYVDMWweP8SkKuKBMrgIL4o8hoYkieQwg2GAV/rpIY1gYpFnl7srJnUO\n" +
-                "F+NDZtoL9HrjcWmtGbNomeCIPVOuUZ1wqhoiV/ossvI6saoZENyjLocCgYEAoPzw\n" +
-                "2wKN/ShNLwySmo1pr/IN6rB7ytPaa5X9UgRcH9beZ9DSiA0FgxlnPU3HJQRPgyhw\n" +
-                "uDMdn4onE2tliX0WoSHXMXWhfXt5YwM2xUgwMO+8NLwLGOmbvwvsA9Ilnc4EcnNn\n" +
-                "Hn+5gYPkosEgGpar+tYMPa54bBKQl4O7w5519GkCgYAUR5roQBmdry11a1Blbzd9\n" +
-                "AUBcyz8LwrQGyKVM+braeo+oSpSCDeQsdE7rEwuXMtIGjyQCb6JG5/VOIwR4b0T4\n" +
-                "dK00ovjdJvMLP7onRpvmNKNXJLcpFFas2alAFwL3Y76MHutMuQML4/UBn4EZqFn5\n" +
-                "cN3yeMODeJIYyyP13zdyrQKBgH1GuEtFvqaNERsWxpLcjqzrSOcjtQGOQL9N9dY4\n" +
-                "LFReia3x85MJxwtQ3mT3PIxSwWlINAczR88Z2/Shs179Z3m2ctY7OpMCXeCt5JY6\n" +
-                "6b17IVNMLbqSN6/AoEYM51bYtd82bL1wGTRvJaF9dfUa4PQOU3JAbddzzu8JBTlh\n" +
-                "+1pZAoGAf9av9DdXuV2la0TaOkeFsgLgZI2YtinOH5+QptKDfDS13ZSUyQKPnr7U\n" +
-                "nAJf7DIbC0VTWBo+yVzzMUYeajfXs1yBiGfz2pSTgCpLJhzKOvEFP7ZfpLa35QwL\n" +
-                "BwgANQglvgHzTTzIbDgQQ+BXoEeQVwqj5hFTvXQzp/Ioqsc4dts=\n" +
-                "-----END RSA PRIVATE KEY-----\n";
-
-        String docuSignCombinedToken1 = jwtBase64HeaderJson + "." + jwtBase64BodyJson;
-
-        String docusignSignature = null;
-        try {
-            docusignSignature = CommonUtility.signSHA256RSAfromPKCS1(docuSignCombinedToken1, docuSignPrivateKey);
-
-            String docusignCombinedToken2 = docuSignCombinedToken1 + "." + docusignSignature;
-
-            return this.obtainJwtAccessToken(docusignCombinedToken2);
-        } catch (IOException e) {
-            e.printStackTrace();
-        } catch (NoSuchAlgorithmException e) {
-            e.printStackTrace();
-        } catch (InvalidKeySpecException e) {
-            e.printStackTrace();
-        } catch (InvalidKeyException e) {
-            e.printStackTrace();
-        } catch (SignatureException e) {
-            e.printStackTrace();
-        }
-
-        return Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity("Token signing failed!").build();
-    }
-
-    private Response obtainJwtAccessToken(String signedDocusignToken) {
-        try {
-            retrofit2.Response<DocusignAccessTokenResponse> accessTokenResponse = DocusignService.getInstance().obtainJwtAccessToken(signedDocusignToken).execute();
-
-            if(accessTokenResponse.isSuccessful()) {
-                System.out.println(accessTokenResponse.body().getAccess_token());
-            } else {
-                 System.out.println("Not successful!");
-            }
-
-            return Response.status(Response.Status.OK).entity(signedDocusignToken).build();
-        } catch (IOException e) {
-            e.printStackTrace();
-            return Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity("Docusign rest call failed!").build();
-        }
-    }
-
-    @GET
-    @Path("startAuthCodeGrant")
-    public Response startAuthCodeGrant(@QueryParam("sapUserId") String sapUserId, @QueryParam("sapTenantId") String sapTenantId) {
+    private Response getAuthCodeGrantPermission(String sapUserId, String sapTenantId) {
         Response checkTenantResponse = CommonUtility.checkTenant(sapTenantId);
         if(checkTenantResponse != null) {
             return checkTenantResponse;
         }
 
         SapSetupNewTenantPayload sapTenantPayload = InMemoryDataStore.getInstance().getTenant(sapTenantId);
-        String docusignIntegrationKey = sapTenantPayload.getDocusignIntegrationKey();
+        String docusignIntegrationKey = sapTenantPayload.getVendorAppIdentifier();
 
         String pendingRequestUUID = UUID.randomUUID().toString();
         OAuthPendingRequestContext oAuthPendingRequestContext = new OAuthPendingRequestContext(sapUserId, sapTenantId);
@@ -194,15 +104,177 @@ public class OAuthRouter {
         return Response.seeOther(uri).build();
     }
 
+    @GET
+    @Path("getJwtToken")
+    public Response getJwtToken(@QueryParam("docusignIntegrationKey") String docusignIntegrationKey, @QueryParam("docusignUserId") String docusignUserId) {
+        return Response.status(Response.Status.OK).entity(this.createJwtTokenWithLibrary(docusignIntegrationKey, docusignUserId)).build();
+    }
+
+    private String createJwtTokenWithLibrary(String docusignIntegrationKey, String docusignUserId) {
+        Date now = Calendar.getInstance().getTime();
+
+        Map<String, Object> additionalClaims = new HashMap<>();
+        additionalClaims.put("scope", docuSignRequestedScope);
+
+        String docuSignPrivateKey = "-----BEGIN RSA PRIVATE KEY-----\n" +
+                "MIIEpAIBAAKCAQEAoyo/pPuXTi6miNWUh2MifOeo2N11nM+fpOU01zB1oDTMFoUe\n" +
+                "LOmfVo2AOe0jpEjmQ4+8FaCUmlW53KxX/deIbhSnbNXpFKT22xom5KvmQT6xxfhm\n" +
+                "5Jwum4FOyspJsIE6PDCtNHAUMncSxtC9DfIHj2OI2z8RVTWLCiBPeBtilIQR95Ik\n" +
+                "aXKzXck8VjrXIf+eqc/TXeNTKMz9RhqVFdZnIPenTPOZ8cYrXWhvSKIPF1fse1GR\n" +
+                "Op2nI0oqqq3vzrPV2c9g6dryQW8tZX/tZts73uWFGkeUPkKKLrZPeIXceeQ6GwiS\n" +
+                "uND+QFkDcR+73fowFRJgKNBDfoobrbw5ii2gKwIDAQABAoIBACZUYPIdZjxoChgf\n" +
+                "8E3jtHDaLNiRIbVuMscWTxT0HdW+QWlS6TVMxnEbOZGiCxrnQyyA4gLEn9QnqktU\n" +
+                "MzF/Bd4yPOh80c3XOORcnuFeHm+aTkG+6lDu/aXrOPq7jZcIrIkCOFYWtC/st/z7\n" +
+                "gUX64trE25wBk01MkDaXQ4PoDv7rK1UJaPd7Vqwnr3zzsgVLhHVlF9J7KnVXWKFD\n" +
+                "KplOfU4v4o5kPN0mNcqHcZ6jGg8HAwOGS8vAbW5YpWLCeG4PxLAqD5LSsovyAsAP\n" +
+                "Mf39QuL/jAuEXpjnIDKfAZ2IZhgPcg4NIXnVv9skLkiKtD0V9OIjMsJAEHkSrZcm\n" +
+                "qOor+fkCgYEA/a7a+2q7ywNxXNa7gkHJAC0npEjnZY/WqMaKp5pLe+6k1G0T/gXs\n" +
+                "lkT21qND6j+VcdlPSGru7wXhwZ7aSBgKlDU7vovVv6bF2wL4e8mSY/XwybQeOYcC\n" +
+                "SN9O9l04p8Sl7GQmn1b6hCXCvr5bBCUxfm+6uBpi5SozD52kTJHa/5MCgYEApKfA\n" +
+                "B/9/zrIVodA1MexmtkiNMVNXFcmvqzq3ZafBcvz12el2jDFfEQnS2BKx2OIEpGCf\n" +
+                "Hdn2ndzW0WX0Rs26wwUduC95LolCToBC4n36SQ1wfsm/3OkOooGkfHUm6tIzZt96\n" +
+                "NOok3hueCPUqSV0b9/kyfnyTWhqFaYhz6XbZTAkCgYEArBrqudNJoIuvZxrPj6lt\n" +
+                "4k7ALDbBtieFrG82Nkr5lxTqgquV+qquPayAAlI1i0Cj9N9HaIwTmdnVtXQ+Btc4\n" +
+                "piAPblCULTfJ17IGPoUcafC68TzfnIu5wxKtEXthKoDBSMURZtytjOXJX3rpaMCK\n" +
+                "+Yp3lNth6LNefOOoScJSXz0CgYEAmoccv+TXy+JyTtSat+nHU5evevVeK4KHLUoD\n" +
+                "yJGyCfrBuOtUaKoFMHZpvIN/Ca7E8IgFjPx8aRdTPF5U7QYzGsf4Zl2Xe0cyRX42\n" +
+                "R143wMuuIi+xst++7mCBQJSqG4N+3jMp+/Mq+pAstvdv4j5R+12SOAcuO0fcoXiA\n" +
+                "YEE8GhECgYBLoa249qXJljBSyORWNourisoN4nnGOt+wqrMm/DxstrhirDdXBhCa\n" +
+                "kd+RYMo9cWOIrLWBTtQEDdvHwhpZE8oAI5Hnr6Xk16E3xb9BDGD2F4TtXbQBXozm\n" +
+                "Fr+OGZgVs38Eb8e/ftmWm4Kv9MvSCXN6WUm64UN9H8tMjMvlCL4CpQ==\n" +
+                "-----END RSA PRIVATE KEY-----\n";
+
+
+        try {
+            Key privateKey = CommonUtility.stringToPrivateKey(docuSignPrivateKey);
+            // SecretKey secretKey = new SecretKeySpec(keyInBytes, 0, keyInBytes.length, "RS256");
+
+            // KeyPair keyPair = Keys.keyPairFor(SignatureAlgorithm.RS256);
+
+            String jws = Jwts.builder()
+                    .setHeaderParam("typ", "JWT")
+                    .setHeaderParam("alg", "RS256")
+                    .setSubject(docusignUserId)
+                    .setIssuer(docusignIntegrationKey)
+                    .setAudience(docuSignEnvironmentUrlString)
+                    .setIssuedAt(now)
+                    .addClaims(additionalClaims)
+                    .signWith(privateKey)
+                    .compact();
+
+            return jws;
+        } catch (IOException e) {
+            e.printStackTrace();
+        } catch (NoSuchAlgorithmException e) {
+            e.printStackTrace();
+        } catch (InvalidKeySpecException e) {
+            e.printStackTrace();
+        }
+
+        return null;
+    }
+
+    private String createJwtToken(String docusignIntegrationKey, String docusignUserId) {
+        Date now = Calendar.getInstance().getTime();
+        long nowEpochTime = now.getTime();
+
+        DocusignJwtHeader docusignJwtHeader = new DocusignJwtHeader();
+        String jwtHeaderJson = CommonUtility.getConfiguredGsonInstance().toJson(docusignJwtHeader);
+        String jwtBase64HeaderJson = Base64.getUrlEncoder().withoutPadding().encodeToString(jwtHeaderJson.getBytes());
+
+
+        DocusignJwtBody docusignJwtBody = new DocusignJwtBody(docusignIntegrationKey, docusignUserId, nowEpochTime, nowEpochTime + 60 * 60 * 1000, docuSignEnvironmentUrlString, docuSignRequestedScope);
+        String jwtBodyJson = CommonUtility.getConfiguredGsonInstance().toJson(docusignJwtBody);
+        String jwtBase64BodyJson = Base64.getUrlEncoder().withoutPadding().encodeToString(jwtBodyJson.getBytes(StandardCharsets.UTF_8));
+
+        String docuSignPrivateKey = "-----BEGIN RSA PRIVATE KEY-----\n" +
+                "MIIEpAIBAAKCAQEAoyo/pPuXTi6miNWUh2MifOeo2N11nM+fpOU01zB1oDTMFoUe\n" +
+                "LOmfVo2AOe0jpEjmQ4+8FaCUmlW53KxX/deIbhSnbNXpFKT22xom5KvmQT6xxfhm\n" +
+                "5Jwum4FOyspJsIE6PDCtNHAUMncSxtC9DfIHj2OI2z8RVTWLCiBPeBtilIQR95Ik\n" +
+                "aXKzXck8VjrXIf+eqc/TXeNTKMz9RhqVFdZnIPenTPOZ8cYrXWhvSKIPF1fse1GR\n" +
+                "Op2nI0oqqq3vzrPV2c9g6dryQW8tZX/tZts73uWFGkeUPkKKLrZPeIXceeQ6GwiS\n" +
+                "uND+QFkDcR+73fowFRJgKNBDfoobrbw5ii2gKwIDAQABAoIBACZUYPIdZjxoChgf\n" +
+                "8E3jtHDaLNiRIbVuMscWTxT0HdW+QWlS6TVMxnEbOZGiCxrnQyyA4gLEn9QnqktU\n" +
+                "MzF/Bd4yPOh80c3XOORcnuFeHm+aTkG+6lDu/aXrOPq7jZcIrIkCOFYWtC/st/z7\n" +
+                "gUX64trE25wBk01MkDaXQ4PoDv7rK1UJaPd7Vqwnr3zzsgVLhHVlF9J7KnVXWKFD\n" +
+                "KplOfU4v4o5kPN0mNcqHcZ6jGg8HAwOGS8vAbW5YpWLCeG4PxLAqD5LSsovyAsAP\n" +
+                "Mf39QuL/jAuEXpjnIDKfAZ2IZhgPcg4NIXnVv9skLkiKtD0V9OIjMsJAEHkSrZcm\n" +
+                "qOor+fkCgYEA/a7a+2q7ywNxXNa7gkHJAC0npEjnZY/WqMaKp5pLe+6k1G0T/gXs\n" +
+                "lkT21qND6j+VcdlPSGru7wXhwZ7aSBgKlDU7vovVv6bF2wL4e8mSY/XwybQeOYcC\n" +
+                "SN9O9l04p8Sl7GQmn1b6hCXCvr5bBCUxfm+6uBpi5SozD52kTJHa/5MCgYEApKfA\n" +
+                "B/9/zrIVodA1MexmtkiNMVNXFcmvqzq3ZafBcvz12el2jDFfEQnS2BKx2OIEpGCf\n" +
+                "Hdn2ndzW0WX0Rs26wwUduC95LolCToBC4n36SQ1wfsm/3OkOooGkfHUm6tIzZt96\n" +
+                "NOok3hueCPUqSV0b9/kyfnyTWhqFaYhz6XbZTAkCgYEArBrqudNJoIuvZxrPj6lt\n" +
+                "4k7ALDbBtieFrG82Nkr5lxTqgquV+qquPayAAlI1i0Cj9N9HaIwTmdnVtXQ+Btc4\n" +
+                "piAPblCULTfJ17IGPoUcafC68TzfnIu5wxKtEXthKoDBSMURZtytjOXJX3rpaMCK\n" +
+                "+Yp3lNth6LNefOOoScJSXz0CgYEAmoccv+TXy+JyTtSat+nHU5evevVeK4KHLUoD\n" +
+                "yJGyCfrBuOtUaKoFMHZpvIN/Ca7E8IgFjPx8aRdTPF5U7QYzGsf4Zl2Xe0cyRX42\n" +
+                "R143wMuuIi+xst++7mCBQJSqG4N+3jMp+/Mq+pAstvdv4j5R+12SOAcuO0fcoXiA\n" +
+                "YEE8GhECgYBLoa249qXJljBSyORWNourisoN4nnGOt+wqrMm/DxstrhirDdXBhCa\n" +
+                "kd+RYMo9cWOIrLWBTtQEDdvHwhpZE8oAI5Hnr6Xk16E3xb9BDGD2F4TtXbQBXozm\n" +
+                "Fr+OGZgVs38Eb8e/ftmWm4Kv9MvSCXN6WUm64UN9H8tMjMvlCL4CpQ==\n" +
+                "-----END RSA PRIVATE KEY-----\n";
+
+        String docuSignCombinedToken1 = jwtBase64HeaderJson + "." + jwtBase64BodyJson;
+
+        String docusignSignature = null;
+        try {
+            docusignSignature = CommonUtility.signSHA256RSAfromPKCS1(docuSignCombinedToken1, docuSignPrivateKey);
+
+            String docusignCombinedToken2 = docuSignCombinedToken1 + "." + docusignSignature;
+
+            return docusignCombinedToken2;
+        } catch (IOException e) {
+            e.printStackTrace();
+        } catch (NoSuchAlgorithmException e) {
+            e.printStackTrace();
+        } catch (InvalidKeySpecException e) {
+            e.printStackTrace();
+        } catch (InvalidKeyException e) {
+            e.printStackTrace();
+        } catch (SignatureException e) {
+            e.printStackTrace();
+        }
+
+        return null;
+    }
+
+    private Response obtainJwtAccessToken(String sapUserId, String sapTenantId) {
+
+        SapSetupNewTenantPayload sapTenantPayload = InMemoryDataStore.getInstance().getTenant(sapTenantId);
+        String docusignIntegrationKey = sapTenantPayload.getVendorAppIdentifier();
+
+        SapConnectedUsers sapConnectedUsers = InMemoryDataStore.getInstance().getConnectedUsers(sapUserId, sapTenantId);
+        String docusignUserId = sapConnectedUsers.getDocusignUserId();
+
+        String signedJwtToken = this.createJwtToken(docusignIntegrationKey, docusignUserId);
+
+        try {
+            retrofit2.Response<DocusignAccessTokenResponse> accessTokenResponse = DocusignService.getInstance().obtainJwtAccessToken(signedJwtToken).execute();
+
+            if(accessTokenResponse.isSuccessful()) {
+                sapConnectedUsers.setDocusignJwtAccessToken(accessTokenResponse.body().getAccess_token());
+                InMemoryDataStore.getInstance().saveConnectedUsers(sapConnectedUsers);
+            } else {
+                return Response.status(Response.Status.BAD_REQUEST).entity(accessTokenResponse.message()).build();
+            }
+
+            return Response.status(Response.Status.OK).entity(sapConnectedUsers).build();
+        } catch (IOException e) {
+            e.printStackTrace();
+            return Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity("Docusign rest call failed!").build();
+        }
+    }
+
     private Response obtainIndividualAccessToken(String token, String sapUserId, String sapTenantId) {
 
         SapSetupNewTenantPayload sapTenantPayload = InMemoryDataStore.getInstance().getTenant(sapTenantId);
-        String docusignIntegrationKey = sapTenantPayload.getDocusignIntegrationKey();
-        String docusignSecretKey = sapTenantPayload.getDocusignSecretKey();
+        String docusignIntegrationKey = sapTenantPayload.getVendorAppIdentifier();
+        String docusignSecretKey = sapTenantPayload.getVendorAppSecretKey();
 
         SapConnectedUsers sapConnectedUsers = InMemoryDataStore.getInstance().getConnectedUsers(sapUserId, sapTenantId);
         if(sapConnectedUsers == null) {
-            sapConnectedUsers = new SapConnectedUsers(sapUserId, sapTenantId, null, null, null, null);
+            sapConnectedUsers = new SapConnectedUsers(sapUserId, sapTenantId, null, null, null, null, null);
         }
 
         try {
@@ -231,6 +303,7 @@ public class OAuthRouter {
 
     private Response selectDefaultAccount(String sapUserId, String sapTenantId, String accessToken) {
 
+        SapSetupNewTenantPayload setupNewTenantPayload = InMemoryDataStore.getInstance().getTenant(sapTenantId);
         SapConnectedUsers sapConnectedUsers = InMemoryDataStore.getInstance().getConnectedUsers(sapUserId, sapTenantId);
         // check for null and throw error in prod
 
@@ -247,7 +320,11 @@ public class OAuthRouter {
                  }
              }
 
-            return Response.status(Response.Status.OK).entity(sapConnectedUsers).build();
+             if(setupNewTenantPayload.isSharedAuth()) {
+                 return this.obtainJwtAccessToken(sapUserId, sapTenantId);
+             } else {
+                 return Response.status(Response.Status.OK).entity(sapConnectedUsers).build();
+             }
         } catch (IOException e) {
             e.printStackTrace();
             return Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity("Docusign rest call failed!").build();

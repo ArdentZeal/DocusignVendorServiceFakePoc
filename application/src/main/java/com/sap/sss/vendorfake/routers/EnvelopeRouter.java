@@ -21,15 +21,14 @@ public class EnvelopeRouter {
 
     @POST
     @Path("envelopes")
-    public Response createEnvelope(@HeaderParam("X-SAP-AA-UserId") String sapUserId, @HeaderParam("X-SAP-AA-TenantId") String sapTenantId, @HeaderParam("X-SAP-AA-ShouldUseSharedAuth") boolean shouldUseSharedAuth, @HeaderParam("X-SAP-AA-ActOnBehalfOfUserId") String sapOnBehalfUserId, @HeaderParam("X-SAP-AA-Signature") String signature, SapEnvelope envelope)
+    public Response createEnvelope(@HeaderParam("X-SAP-AA-UserId") String sapUserId, @HeaderParam("X-SAP-AA-TenantId") String sapTenantId, @HeaderParam("X-SAP-AA-Signature") String signature, SapEnvelope envelope)
     {
-        Response authenicationResponse = CommonUtility.peformAndCheckAllAuthentication(sapUserId, sapTenantId, shouldUseSharedAuth, sapOnBehalfUserId, signature);
-        if(authenicationResponse != null) {
-            return authenicationResponse;
+        Response authenticationResponse = CommonUtility.peformAndCheckAllAuthentication(sapUserId, sapTenantId, signature);
+        if(authenticationResponse != null) {
+            return authenticationResponse;
         }
 
         SapConnectedUsers sapConnectedUsers = InMemoryDataStore.getInstance().getConnectedUsers(sapUserId, sapTenantId);
-        //TODO: if null error in prod
 
         try {
             DocusignService.getInstance().createEnvelope(sapConnectedUsers.getDocusignAccessToken(), sapConnectedUsers.getDocusignAccountId(), envelope).execute();

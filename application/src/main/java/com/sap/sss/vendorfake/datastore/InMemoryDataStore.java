@@ -28,9 +28,7 @@ public class InMemoryDataStore {
 
     public void saveConnectedUsers(SapConnectedUsers connectedUsers) {
         String key = this.buildKey(connectedUsers.getSapUserId(), connectedUsers.getSapTenantId());
-        if(!savedConnectedUsers.containsKey(key)) {
-            savedConnectedUsers.put(key, connectedUsers);
-        }
+        savedConnectedUsers.put(key, connectedUsers);
     }
 
     public void removeConnectedUsers(String sapUserId, String sapTenantId) {
@@ -48,9 +46,7 @@ public class InMemoryDataStore {
     }
 
     public void saveTenant(SapSetupNewTenantPayload setupNewTenantPayload) {
-        if(!savedTenantPayloads.containsKey(setupNewTenantPayload.getTenantId())) {
-            savedTenantPayloads.put(setupNewTenantPayload.getTenantId(), setupNewTenantPayload);
-        }
+        savedTenantPayloads.put(setupNewTenantPayload.getTenantId(), setupNewTenantPayload);
     }
 
     public void removeTenant(String sapTenantId) {
@@ -62,9 +58,7 @@ public class InMemoryDataStore {
     }
 
     public void savePendingRequestContext(String uuid, OAuthPendingRequestContext oAuthPendingRequestContext) {
-        if(!pendingRequestContexts.containsKey(uuid)) {
-            pendingRequestContexts.put(uuid, oAuthPendingRequestContext);
-        }
+        pendingRequestContexts.put(uuid, oAuthPendingRequestContext);
     }
 
     public void removePendingRequestContext(String uuid) {

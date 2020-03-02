@@ -44,6 +44,31 @@ public class CommonUtility {
         return Base64.getEncoder().encodeToString(s);
     }
 
+    public static PrivateKey stringToPrivateKey(String strPk) throws NoSuchAlgorithmException, InvalidKeySpecException, IOException {
+        String realPK = strPk.replaceAll("-----END RSA PRIVATE KEY-----", "")
+                .replaceAll("-----BEGIN RSA PRIVATE KEY-----", "")
+                .replaceAll("\n", "");
+
+        byte[] bytes = Base64.getDecoder().decode(realPK);
+
+        DerInputStream derReader = new DerInputStream(bytes);
+        DerValue[] seq = derReader.getSequence(0);
+        // skip version seq[0];
+        BigInteger modulus = seq[1].getBigInteger();
+        BigInteger publicExp = seq[2].getBigInteger();
+        BigInteger privateExp = seq[3].getBigInteger();
+        BigInteger prime1 = seq[4].getBigInteger();
+        BigInteger prime2 = seq[5].getBigInteger();
+        BigInteger exp1 = seq[6].getBigInteger();
+        BigInteger exp2 = seq[7].getBigInteger();
+        BigInteger crtCoef = seq[8].getBigInteger();
+
+        RSAPrivateCrtKeySpec keySpec = new RSAPrivateCrtKeySpec(modulus, publicExp, privateExp, prime1, prime2, exp1, exp2, crtCoef);
+        KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+        PrivateKey privateKey = keyFactory.generatePrivate(keySpec);
+        return privateKey;
+    }
+
     public static String signSHA256RSAfromPKCS1(String input, String strPk) throws NoSuchAlgorithmException, InvalidKeySpecException, InvalidKeyException, SignatureException, IOException {
         String realPK = strPk.replaceAll("-----END RSA PRIVATE KEY-----", "")
                 .replaceAll("-----BEGIN RSA PRIVATE KEY-----", "")
@@ -71,11 +96,11 @@ public class CommonUtility {
         privateSignature.initSign(privateKey);
         privateSignature.update(input.getBytes(StandardCharsets.UTF_8));
         byte[] s = privateSignature.sign();
-        return Base64.getEncoder().encodeToString(s);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(s);
     }
 
-    public static Response peformAndCheckAllAuthentication(String sapUserId, String sapTenantId, boolean shouldUseSharedAuth, String sapOnBehalfUserId, String signature) {
-        Response checkAuthenticationSignatureResponse = CommonUtility.checkAuthenticationSignature(sapUserId, sapTenantId, shouldUseSharedAuth, sapOnBehalfUserId, signature);
+    public static Response peformAndCheckAllAuthentication(String sapUserId, String sapTenantId, String signature) {
+        Response checkAuthenticationSignatureResponse = CommonUtility.checkAuthenticationSignature(sapUserId, sapTenantId, signature);
         if(checkAuthenticationSignatureResponse != null) {
             return checkAuthenticationSignatureResponse;
         }
@@ -88,7 +113,7 @@ public class CommonUtility {
         return null;
     }
 
-    public static Response checkAuthenticationSignature(String sapUserId, String sapTenantId, boolean shouldUseSharedAuth, String sapOnBehalfUserId, String signature) {
+    public static Response checkAuthenticationSignature(String sapUserId, String sapTenantId, String signature) {
         // we do not really check signature for now, implement shared secret or private key later in real app
 
         if(false) {
