@@ -1,6 +1,5 @@
 package com.sap.sss.vendorfake.routers;
 
-import com.google.common.collect.ImmutableMultimap;
 import com.sap.sss.vendorfake.datastore.InMemoryDataStore;
 import com.sap.sss.vendorfake.docusign.*;
 import com.sap.sss.vendorfake.models.OAuthPendingRequestContext;
@@ -8,12 +7,7 @@ import com.sap.sss.vendorfake.models.SapConnectedUsers;
 import com.sap.sss.vendorfake.models.SapSetupNewTenantPayload;
 import com.sap.sss.vendorfake.utiilities.CommonUtility;
 import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.SignatureAlgorithm;
-import io.jsonwebtoken.security.Keys;
-import retrofit2.http.Query;
 
-import javax.crypto.SecretKey;
-import javax.crypto.spec.SecretKeySpec;
 import javax.ws.rs.*;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
@@ -29,8 +23,6 @@ import java.util.*;
 public class OAuthRouter {
     private static String docuSignEnvironmentUrlString = "account-d.docusign.com";
     private static String docuSignRequestedScope = "signature impersonation";
-
-    // TODO: Save docusign user to sapUser
 
     @POST
     @Path("setupNewTenant")
@@ -71,7 +63,6 @@ public class OAuthRouter {
 
         SapSetupNewTenantPayload sapTenantPayload = InMemoryDataStore.getInstance().getTenant(sapTenantId);
         String docusignIntegrationKey = sapTenantPayload.getVendorAppIdentifier();
-
 
         String pendingRequestUUID = UUID.randomUUID().toString();
         OAuthPendingRequestContext oAuthPendingRequestContext = new OAuthPendingRequestContext(sapUserId, sapTenantId);
@@ -147,9 +138,6 @@ public class OAuthRouter {
 
         try {
             Key privateKey = CommonUtility.stringToPrivateKey(docuSignPrivateKey);
-            // SecretKey secretKey = new SecretKeySpec(keyInBytes, 0, keyInBytes.length, "RS256");
-
-            // KeyPair keyPair = Keys.keyPairFor(SignatureAlgorithm.RS256);
 
             String jws = Jwts.builder()
                     .setHeaderParam("typ", "JWT")
